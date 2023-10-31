@@ -416,10 +416,12 @@ blocks_dict = {
 
 class HighResolutionNet(nn.Module):
 
-    def __init__(self, config, **kwargs):
+    def __init__(self, config, output_middle=True, output_cls=True, **kwargs):
         global ALIGN_CORNERS
         extra = config.MODEL.EXTRA
         super(HighResolutionNet, self).__init__()
+        self.output_middle = output_middle
+        self.output_cls = output_cls
         ALIGN_CORNERS = config.MODEL.ALIGN_CORNERS
 
         # stem net
@@ -617,10 +619,11 @@ class HighResolutionNet(nn.Module):
                     x_list.append(self.transition3[i](y_list[-1]))
             else:
                 x_list.append(y_list[i])
-        x = self.stage4(x_list)
+        x = fea_list = self.stage4(x_list)
 
         # Upsampling
-        x0_h, x0_w = x[0].size(2), x[0].size(3)
+        x0 = x[0]
+        x0_h, x0_w = x0.size(2), x0.size(3)
         x1 = F.interpolate(x[1], size=(x0_h, x0_w),
                         mode='bilinear', align_corners=ALIGN_CORNERS)
         x2 = F.interpolate(x[2], size=(x0_h, x0_w),
@@ -628,25 +631,31 @@ class HighResolutionNet(nn.Module):
         x3 = F.interpolate(x[3], size=(x0_h, x0_w),
                         mode='bilinear', align_corners=ALIGN_CORNERS)
 
-        feats = torch.cat([x[0], x1, x2, x3], 1)
+        feats = torch.cat([x0, x1, x2, x3], 1)
 
-        out_aux_seg = []
+        outputs = []
+        if self.output_middle:
+            outputs += fea_list
 
-        # ocr
-        out_aux = self.aux_head(feats)
-        # compute contrast feature
-        feats = self.conv3x3_ocr(feats)
+        if self.output_cls:
+            out_aux_seg = []
 
-        context = self.ocr_gather_head(feats, out_aux)
-        feats = self.ocr_distri_head(feats, context)
+            # ocr
+            out_aux = self.aux_head(feats)
+            # compute contrast feature
+            feats = self.conv3x3_ocr(feats)
 
-        out = self.cls_head(feats)
+            context = self.ocr_gather_head(feats, out_aux)
+            feats = self.ocr_distri_head(feats, context)
 
-        out_aux_seg.append(out_aux)
-        out_aux_seg.append(out)
+            out = self.cls_head(feats)
 
-        return out_aux_seg
+            out_aux_seg.append(out_aux)
+            out_aux_seg.append(out)
+            outputs += out_aux_seg
 
+        return outputs
+    
     def init_weights(self, pretrained='',):
         logger.info('=> init weights from normal distribution')
         for name, m in self.named_modules():
