@@ -6,10 +6,13 @@
 
 import os
 import logging
+import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torchvision.models.utils import load_state_dict_from_url
+import numpy as np
 
+ALIGN_CORNERS = True
 logger = logging.getLogger('hrnet_backbone')
 
 __all__ = ['hrnet18', 'hrnet32', 'hrnet48']
@@ -18,9 +21,9 @@ __all__ = ['hrnet18', 'hrnet32', 'hrnet48']
 model_urls = {
     'hrnet18_imagenet': 'https://opr0mq.dm.files.1drv.com/y4mIoWpP2n-LUohHHANpC0jrOixm1FZgO2OsUtP2DwIozH5RsoYVyv_De5wDgR6XuQmirMV3C0AljLeB-zQXevfLlnQpcNeJlT9Q8LwNYDwh3TsECkMTWXCUn3vDGJWpCxQcQWKONr5VQWO1hLEKPeJbbSZ6tgbWwJHgHF7592HY7ilmGe39o5BhHz7P9QqMYLBts6V7QGoaKrr0PL3wvvR4w',
     'hrnet32_imagenet': 'https://opr74a.dm.files.1drv.com/y4mKOuRSNGQQlp6wm_a9bF-UEQwp6a10xFCLhm4bqjDu6aSNW9yhDRM7qyx0vK0WTh42gEaniUVm3h7pg0H-W0yJff5qQtoAX7Zze4vOsqjoIthp-FW3nlfMD0-gcJi8IiVrMWqVOw2N3MbCud6uQQrTaEAvAdNjtjMpym1JghN-F060rSQKmgtq5R-wJe185IyW4-_c5_ItbhYpCyLxdqdEQ',
-    'hrnet48_imagenet': 'https://optgaw.dm.files.1drv.com/y4mWNpya38VArcDInoPaL7GfPMgcop92G6YRkabO1QTSWkCbo7djk8BFZ6LK_KHHIYE8wqeSAChU58NVFOZEvqFaoz392OgcyBrq_f8XGkusQep_oQsuQ7DPQCUrdLwyze_NlsyDGWot0L9agkQ-M_SfNr10ETlCF5R7BdKDZdupmcMXZc-IE3Ysw1bVHdOH4l-XEbEKFAi6ivPUbeqlYkRMQ'
-    'hrnet48_cityscapes': 'https://optgaw.dm.files.1drv.com/y4mWNpya38VArcDInoPaL7GfPMgcop92G6YRkabO1QTSWkCbo7djk8BFZ6LK_KHHIYE8wqeSAChU58NVFOZEvqFaoz392OgcyBrq_f8XGkusQep_oQsuQ7DPQCUrdLwyze_NlsyDGWot0L9agkQ-M_SfNr10ETlCF5R7BdKDZdupmcMXZc-IE3Ysw1bVHdOH4l-XEbEKFAi6ivPUbeqlYkRMQ'
-    'hrnet48_ocr_cityscapes': 'https://optgaw.dm.files.1drv.com/y4mWNpya38VArcDInoPaL7GfPMgcop92G6YRkabO1QTSWkCbo7djk8BFZ6LK_KHHIYE8wqeSAChU58NVFOZEvqFaoz392OgcyBrq_f8XGkusQep_oQsuQ7DPQCUrdLwyze_NlsyDGWot0L9agkQ-M_SfNr10ETlCF5R7BdKDZdupmcMXZc-IE3Ysw1bVHdOH4l-XEbEKFAi6ivPUbeqlYkRMQ'
+    'hrnet48_imagenet': 'https://optgaw.dm.files.1drv.com/y4mWNpya38VArcDInoPaL7GfPMgcop92G6YRkabO1QTSWkCbo7djk8BFZ6LK_KHHIYE8wqeSAChU58NVFOZEvqFaoz392OgcyBrq_f8XGkusQep_oQsuQ7DPQCUrdLwyze_NlsyDGWot0L9agkQ-M_SfNr10ETlCF5R7BdKDZdupmcMXZc-IE3Ysw1bVHdOH4l-XEbEKFAi6ivPUbeqlYkRMQ',
+    'hrnet48_cityscapes': 'https://optgaw.dm.files.1drv.com/y4mWNpya38VArcDInoPaL7GfPMgcop92G6YRkabO1QTSWkCbo7djk8BFZ6LK_KHHIYE8wqeSAChU58NVFOZEvqFaoz392OgcyBrq_f8XGkusQep_oQsuQ7DPQCUrdLwyze_NlsyDGWot0L9agkQ-M_SfNr10ETlCF5R7BdKDZdupmcMXZc-IE3Ysw1bVHdOH4l-XEbEKFAi6ivPUbeqlYkRMQ',
+    'hrnet48_ocr_cityscapes': 'https://optgaw.dm.files.1drv.com/y4mWNpya38VArcDInoPaL7GfPMgcop92G6YRkabO1QTSWkCbo7djk8BFZ6LK_KHHIYE8wqeSAChU58NVFOZEvqFaoz392OgcyBrq_f8XGkusQep_oQsuQ7DPQCUrdLwyze_NlsyDGWot0L9agkQ-M_SfNr10ETlCF5R7BdKDZdupmcMXZc-IE3Ysw1bVHdOH4l-XEbEKFAi6ivPUbeqlYkRMQ',
 }
 
 # model_urls = {
@@ -290,8 +293,12 @@ class HighResolutionNet(nn.Module):
 
     def __init__(self,
                  cfg,
-                 norm_layer=None):
+                 norm_layer=None,
+                 output_middle=False,
+                 output_cls=True):
         super(HighResolutionNet, self).__init__()
+        self.output_middle = output_middle
+        self.output_cls = output_cls
 
         if norm_layer is None:
             norm_layer = nn.BatchNorm2d
@@ -488,19 +495,26 @@ class HighResolutionNet(nn.Module):
                     x_list.append(self.transition3[i](y_list[-1]))
             else:
                 x_list.append(y_list[i])
-        x = self.stage4(x_list)
+        x = fea_list = self.stage4(x_list)
 
         # Upsampling
-        x0_h, x0_w = x[0].size(2), x[0].size(3)
+        x0 = x[0]
+        x0_h, x0_w = x0.size(2), x0.size(3)
         x1 = F.interpolate(x[1], size=(x0_h, x0_w), mode='bilinear', align_corners=ALIGN_CORNERS)
         x2 = F.interpolate(x[2], size=(x0_h, x0_w), mode='bilinear', align_corners=ALIGN_CORNERS)
         x3 = F.interpolate(x[3], size=(x0_h, x0_w), mode='bilinear', align_corners=ALIGN_CORNERS)
 
-        x = torch.cat([x[0], x1, x2, x3], 1)
+        x = torch.cat([x0, x1, x2, x3], 1)
 
-        x = self.last_layer(x)
+        outputs = []
+        if self.output_middle:
+            outputs += fea_list
+        
+        if self.output_cls:
+            x = self.last_layer(x)
+            outputs.append(x)
 
-        return x
+        return outputs[0] if len(outputs) == 1 else outputs
 
 
 def _hrnet(arch, pretrained, progress, **kwargs):
@@ -510,7 +524,7 @@ def _hrnet(arch, pretrained, progress, **kwargs):
         from segmentation.config.hrnet_config import MODEL_CONFIGS
     model = HighResolutionNet(MODEL_CONFIGS[arch], **kwargs)
     if pretrained:
-        model_url = model_urls[arch]
+        model_url = model_urls[arch + '_imagenet']
         state_dict = load_state_dict_from_url(model_url,
                                               progress=progress)
         model.load_state_dict(state_dict, strict=False)
