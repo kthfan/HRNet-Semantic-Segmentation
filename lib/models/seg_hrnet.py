@@ -260,10 +260,12 @@ blocks_dict = {
 
 class HighResolutionNet(nn.Module):
 
-    def __init__(self, config, **kwargs):
+    def __init__(self, config, output_middle=True, output_cls=True, **kwargs):
         global ALIGN_CORNERS
         extra = config.MODEL.EXTRA
         super(HighResolutionNet, self).__init__()
+        self.output_middle = output_middle
+        self.output_cls = output_cls
         ALIGN_CORNERS = config.MODEL.ALIGN_CORNERS
 
         # stem net
@@ -450,22 +452,29 @@ class HighResolutionNet(nn.Module):
                     x_list.append(self.transition3[i](y_list[-1]))
             else:
                 x_list.append(y_list[i])
-        x = self.stage4(x_list)
+        x = fea_list = self.stage4(x_list)
 
         # Upsampling
-        x0_h, x0_w = x[0].size(2), x[0].size(3)
+        x0 = x[0]
+        x0_h, x0_w = x0.size(2), x0.size(3)
         x1 = F.interpolate(x[1], size=(x0_h, x0_w), mode='bilinear', align_corners=ALIGN_CORNERS)
         x2 = F.interpolate(x[2], size=(x0_h, x0_w), mode='bilinear', align_corners=ALIGN_CORNERS)
         x3 = F.interpolate(x[3], size=(x0_h, x0_w), mode='bilinear', align_corners=ALIGN_CORNERS)
 
-        x = torch.cat([x[0], x1, x2, x3], 1)
+        x = torch.cat([x0, x1, x2, x3], 1)
 
-        x = self.last_layer(x)
+        outputs = []
+        if self.output_middle:
+            outputs += fea_list
 
-        return x
+        if self.output_cls:
+            x = self.last_layer(x)
+            outputs.append(x)
+
+        return outputs[0] if len(outputs) == 1 else outputs
 
     def init_weights(self, pretrained='',):
-        logger.info('=> init weights from normal distribution')
+        logger.info('=> init weights from normal distribution') 
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 nn.init.normal_(m.weight, std=0.001)
